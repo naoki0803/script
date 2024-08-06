@@ -24,12 +24,15 @@ sleep 0.2
 # プレビューURLをChromeで開く
 open -na "Google Chrome" --args --new-window "http://localhost:8000"
 
-# 解像度の変数を定義
-# SCREEN_WIDTH=2560
-# SCREEN_HEIGHT=1440
+# ディスプレイの解像度を取得
+SCREEN_INFO=$(displayplacer list | grep 'Resolution:' | head -n 1)
+SCREEN_WIDTH=$(echo $SCREEN_INFO | sed -n 's/.*Resolution: \([0-9]*\)x[0-9]*/\1/p')
+SCREEN_HEIGHT=$(echo $SCREEN_INFO | sed -n 's/.*Resolution: [0-9]*x\([0-9]*\).*/\1/p')
 
-SCREEN_WIDTH=1470
-SCREEN_HEIGHT=956
+# 解像度の値を出力
+echo "SCREEN_INFO: $SCREEN_INFO"
+echo "SCREEN_WIDTH: $SCREEN_WIDTH"
+echo "SCREEN_HEIGHT: $SCREEN_HEIGHT"
 
 HALF_WIDTH=$((SCREEN_WIDTH / 2))
 
