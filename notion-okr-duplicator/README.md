@@ -29,6 +29,7 @@ chmod +x run_okr_duplicate.sh okr_duplicate.py
 このフォルダには `.env.local` を作成済みなので、通常は `NOTION_TOKEN` を追記するだけで使えます。  
 既定値は **database ID 優先** にしてあり、親ページが integration に共有されていなくても動かしやすくしています。
 `.env.local` は Git 管理対象外です。
+`.env.local.example` には実トークンではなくプレースホルダーだけを入れています。
 
 ## 実行
 
