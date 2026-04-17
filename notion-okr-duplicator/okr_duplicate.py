@@ -397,9 +397,9 @@ def deduplicate_selected_pages(
     created_time_property_name: str | None,
     relation_title_cache: dict[str, str],
 ) -> tuple[list[dict[str, Any]], int]:
-    latest_page_by_group: dict[tuple[str, str, str], dict[str, Any]] = {}
+    group_states: dict[tuple[str, str, str], dict[str, Any]] = {}
 
-    for page in pages:
+    for index, page in enumerate(pages):
         group_key = build_duplicate_group_key(
             page=page,
             client=client,
@@ -408,17 +408,31 @@ def deduplicate_selected_pages(
             key_property_name=key_property_name,
             relation_title_cache=relation_title_cache,
         )
-        existing_page = latest_page_by_group.get(group_key)
-        if existing_page is None:
-            latest_page_by_group[group_key] = page
-            continue
 
         current_created_time = get_page_created_timestamp(page, created_time_property_name)
-        existing_created_time = get_page_created_timestamp(existing_page, created_time_property_name)
-        if current_created_time > existing_created_time:
-            latest_page_by_group[group_key] = page
+        state = group_states.get(group_key)
+        if state is None:
+            group_states[group_key] = {
+                "latest_page": page,
+                "latest_created_time": current_created_time,
+                "oldest_created_time": current_created_time,
+                "oldest_index": index,
+            }
+            continue
 
-    deduplicated_pages = list(latest_page_by_group.values())
+        if current_created_time > state["latest_created_time"]:
+            state["latest_page"] = page
+            state["latest_created_time"] = current_created_time
+
+        if current_created_time < state["oldest_created_time"]:
+            state["oldest_created_time"] = current_created_time
+            state["oldest_index"] = index
+
+    ordered_states = sorted(
+        group_states.values(),
+        key=lambda state: (state["oldest_created_time"], state["oldest_index"]),
+    )
+    deduplicated_pages = [state["latest_page"] for state in ordered_states]
     dropped_duplicates = len(pages) - len(deduplicated_pages)
     return deduplicated_pages, dropped_duplicates
 
