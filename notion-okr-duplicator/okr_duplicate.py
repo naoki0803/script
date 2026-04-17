@@ -365,6 +365,17 @@ def is_blank_result_page(
     return property_to_plain_text(title_property).strip() == ""
 
 
+def get_result_text(
+    page: dict[str, Any],
+    title_property_name: str | None,
+) -> str:
+    if not title_property_name:
+        return ""
+
+    title_property = page.get("properties", {}).get(title_property_name, {})
+    return property_to_plain_text(title_property).strip()
+
+
 def build_duplicate_group_key(
     *,
     page: dict[str, Any],
@@ -395,6 +406,7 @@ def deduplicate_selected_pages(
     object_property_name: str,
     key_property_name: str,
     created_time_property_name: str | None,
+    title_property_name: str | None,
     relation_title_cache: dict[str, str],
 ) -> tuple[list[dict[str, Any]], int]:
     group_states: dict[tuple[str, str, str], dict[str, Any]] = {}
@@ -410,6 +422,7 @@ def deduplicate_selected_pages(
         )
 
         current_created_time = get_page_created_timestamp(page, created_time_property_name)
+        current_result_text = get_result_text(page, title_property_name)
         state = group_states.get(group_key)
         if state is None:
             group_states[group_key] = {
@@ -417,6 +430,9 @@ def deduplicate_selected_pages(
                 "latest_created_time": current_created_time,
                 "oldest_created_time": current_created_time,
                 "oldest_index": index,
+                "group_key": group_key,
+                "previous_result_text": current_result_text,
+                "previous_result_created_time": current_created_time if current_result_text else "",
             }
             continue
 
@@ -428,19 +444,24 @@ def deduplicate_selected_pages(
             state["oldest_created_time"] = current_created_time
             state["oldest_index"] = index
 
+        if current_result_text:
+            previous_result_created_time = state["previous_result_created_time"]
+            if not previous_result_created_time or current_created_time > previous_result_created_time:
+                state["previous_result_text"] = current_result_text
+                state["previous_result_created_time"] = current_created_time
+
     ordered_states = sorted(
         group_states.values(),
         key=lambda state: (state["oldest_created_time"], state["oldest_index"]),
     )
-    deduplicated_pages = [state["latest_page"] for state in ordered_states]
-    dropped_duplicates = len(pages) - len(deduplicated_pages)
-    return deduplicated_pages, dropped_duplicates
+    dropped_duplicates = len(pages) - len(ordered_states)
+    return ordered_states, dropped_duplicates
 
 
 def filter_already_copied_today(
     *,
     client: NotionClient,
-    candidate_pages: list[dict[str, Any]],
+    candidate_groups: list[dict[str, Any]],
     all_pages: list[dict[str, Any]],
     period_property_name: str,
     object_property_name: str,
@@ -472,23 +493,16 @@ def filter_already_copied_today(
             )
         )
 
-    filtered_pages: list[dict[str, Any]] = []
+    filtered_groups: list[dict[str, Any]] = []
     skipped_count = 0
-    for page in candidate_pages:
-        group_key = build_duplicate_group_key(
-            page=page,
-            client=client,
-            period_property_name=period_property_name,
-            object_property_name=object_property_name,
-            key_property_name=key_property_name,
-            relation_title_cache=relation_title_cache,
-        )
+    for group in candidate_groups:
+        group_key = group["group_key"]
         if group_key in groups_with_copy_today:
             skipped_count += 1
             continue
-        filtered_pages.append(page)
+        filtered_groups.append(group)
 
-    return filtered_pages, skipped_count, today_local_date
+    return filtered_groups, skipped_count, today_local_date
 
 
 def describe_page(
@@ -820,42 +834,19 @@ def duplicate_pages(
     data_source_id: str,
     data_source_name: str,
     schema_properties: dict[str, Any],
-    selected_pages: list[dict[str, Any]],
-    title_property_name: str | None,
-    object_property_name: str,
-    key_property_name: str,
+    selected_groups: list[dict[str, Any]],
     execute: bool,
     limit: int | None,
-    relation_title_cache: dict[str, str],
 ) -> tuple[int, set[str]]:
-    pages_to_duplicate = selected_pages if limit is None else selected_pages[:limit]
+    groups_to_duplicate = selected_groups if limit is None else selected_groups[:limit]
     skipped_properties: set[str] = set()
 
     if not execute:
-        print(
-            "ドライランです。まだ Notion には 1 件も作成していません。"
-        )
-        print(
-            f"本番実行すると、'{data_source_name}'（データソース ID: {data_source_id}）に "
-            f"{len(pages_to_duplicate)} 件を複製します。"
-        )
-        if not pages_to_duplicate:
-            print("今回複製対象になるレコードはありません。今日はすでに同じグループのコピーが作成済みです。")
-            print("Notion に実際に複製を作成するには、--execute を付けて再実行してください。")
-            return len(pages_to_duplicate), skipped_properties
-
-        print("以下の行が、実際に複製対象になる Notion レコードです:")
-        for page in pages_to_duplicate[:10]:
-            print(
-                f"- {describe_page(page, title_property_name, object_property_name, key_property_name, client, relation_title_cache)}"
-            )
-        if len(pages_to_duplicate) > 10:
-            print(f"... ほか {len(pages_to_duplicate) - 10} 件")
-        print("Notion に実際に複製を作成するには、--execute を付けて再実行してください。")
-        return len(pages_to_duplicate), skipped_properties
+        return len(groups_to_duplicate), skipped_properties
 
     created_count = 0
-    for page in pages_to_duplicate:
+    for group in groups_to_duplicate:
+        page = group["latest_page"]
         create_properties, page_skipped_properties = build_create_properties(
             schema_properties=schema_properties,
             page_properties=page.get("properties", {}),
@@ -875,6 +866,33 @@ def duplicate_pages(
         created_count += 1
 
     return created_count, skipped_properties
+
+
+def print_result_box(lines: list[str]) -> None:
+    print("┌─ 実行結果 ───────────────────────────")
+    for line in lines:
+        print(f"│ {line}")
+    print("└──────────────────────────────────────")
+
+
+def print_target_groups(groups: list[dict[str, Any]], limit: int | None) -> None:
+    groups_to_show = groups if limit is None else groups[:limit]
+    if not groups_to_show:
+        print("今回複製対象になるレコードはありません。")
+        return
+
+    for index, group in enumerate(groups_to_show, start=1):
+        _, object_name, key_name = group["group_key"]
+        previous_result_text = group["previous_result_text"] or "(空欄)"
+        print(f"[対象{index}] {object_name}")
+        print(f"  Keys          : {key_name}")
+        print(f"  前回実施結果 : {previous_result_text}")
+        if index != len(groups_to_show):
+            print("")
+
+    if limit is not None and len(groups) > limit:
+        print("")
+        print(f"... ほか {len(groups) - limit} 件")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -950,26 +968,19 @@ def main() -> int:
         relation_title_cache=relation_title_cache,
     )
 
-    for warning in warnings[:MAX_WARNING_PREVIEW]:
-        print_warning(warning)
-    if len(warnings) > MAX_WARNING_PREVIEW:
-        print_warning(
-            f"追加の警告を {len(warnings) - MAX_WARNING_PREVIEW} 件省略しました。"
-            "省略した行も、対象期間 を年月として解釈できないためスキップされています。"
-        )
-
-    deduplicated_pages, dropped_duplicates = deduplicate_selected_pages(
+    deduplicated_groups, dropped_duplicates = deduplicate_selected_pages(
         client=client,
         pages=selected_pages,
         period_property_name=args.period_property,
         object_property_name=args.object_property,
         key_property_name=args.key_property,
         created_time_property_name=created_time_property_name,
+        title_property_name=title_property_name,
         relation_title_cache=relation_title_cache,
     )
-    pages_to_copy, skipped_existing_today, today_local_date = filter_already_copied_today(
+    groups_to_copy, skipped_existing_today, today_local_date = filter_already_copied_today(
         client=client,
-        candidate_pages=deduplicated_pages,
+        candidate_groups=deduplicated_groups,
         all_pages=pages,
         period_property_name=args.period_property,
         object_property_name=args.object_property,
@@ -979,35 +990,35 @@ def main() -> int:
         relation_title_cache=relation_title_cache,
     )
 
-    print(
-        f"'{data_source_name}' で最新の '{args.period_property}' は {latest_period} です。"
-        f"最新期間の元行数: {len(selected_pages)} 件。"
-        f"{args.period_property}/{args.object_property}/{args.key_property} の重複解消後の複製対象: "
-        f"{len(deduplicated_pages)} 件。"
-    )
+    mode_label = "本番実行" if args.execute else "ドライラン"
+    planned_count = len(groups_to_copy if args.limit is None else groups_to_copy[: args.limit])
+    summary_lines = [
+        f"モード               : {mode_label}",
+        f"データソース         : {data_source_name}",
+        f"対象期間             : {latest_period}",
+        f"最新期間の元行数     : {len(selected_pages)}件",
+        f"重複解消後の対象     : {len(deduplicated_groups)}件",
+        f"本日作成済みスキップ : {skipped_existing_today}件",
+        f"対象期間解釈不可     : {len(warnings)}件",
+        f"今回の複製予定       : {planned_count}件",
+    ]
     if dropped_duplicates:
-        print(
-            f"重複グループが見つかったため、古い {dropped_duplicates} 件を除外し、"
-            "各グループで作成日時が最新の 1 件だけを残しました。"
-        )
+        summary_lines.append(f"重複除外             : {dropped_duplicates}件")
     if skipped_existing_today:
-        print(
-            f"冪等性チェック: 本日 ({today_local_date}) に作成済みのコピーがある "
-            f"{skipped_existing_today} グループはスキップします。"
-        )
+        summary_lines.append(f"スキップ対象日       : {today_local_date}")
+    print_result_box(summary_lines)
+    print("")
+    print_target_groups(groups_to_copy, args.limit)
+    print("")
 
     created_count, skipped_properties = duplicate_pages(
         client,
         data_source_id=data_source_id,
         data_source_name=data_source_name,
         schema_properties=schema_properties,
-        selected_pages=pages_to_copy,
-        title_property_name=title_property_name,
-        object_property_name=args.object_property,
-        key_property_name=args.key_property,
+        selected_groups=groups_to_copy,
         execute=args.execute,
         limit=args.limit,
-        relation_title_cache=relation_title_cache,
     )
 
     if skipped_properties:
@@ -1016,6 +1027,8 @@ def main() -> int:
 
     if args.execute:
         print(f"実行完了: Notion に {created_count} 件の複製を作成しました。")
+    else:
+        print("Notion に実際に複製を作成するには、--execute を付けて再実行してください。")
 
     return 0
 
