@@ -1,0 +1,85 @@
+name: Notion OKR duplicate
+
+on:
+  workflow_dispatch:
+    inputs:
+      execute:
+        description: true なら Notion に複製を作成し、false なら dry-run のみ実行します
+        required: true
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+      limit:
+        description: テスト用。先頭から実行する件数（空欄で全件）
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: notion-okr-duplicate
+  cancel-in-progress: false
+
+jobs:
+  duplicate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: bash
+        working-directory: notion-okr-duplicator
+    env:
+      NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+      NOTION_BASE_URL: ${{ secrets.NOTION_BASE_URL }}
+      NOTION_PAGE_ID: ${{ secrets.NOTION_PAGE_ID }}
+      NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
+      NOTION_DATA_SOURCE_ID: ${{ secrets.NOTION_DATA_SOURCE_ID }}
+      NOTION_CHILD_DATABASE_TITLE: ${{ secrets.NOTION_CHILD_DATABASE_TITLE }}
+      NOTION_DATA_SOURCE_NAME: ${{ secrets.NOTION_DATA_SOURCE_NAME }}
+      NOTION_PERIOD_PROPERTY: ${{ secrets.NOTION_PERIOD_PROPERTY }}
+      NOTION_OBJECT_PROPERTY: ${{ secrets.NOTION_OBJECT_PROPERTY }}
+      NOTION_KEY_PROPERTY: ${{ secrets.NOTION_KEY_PROPERTY }}
+      NOTION_TIMEOUT_SECONDS: ${{ secrets.NOTION_TIMEOUT_SECONDS }}
+      NOTION_EXECUTE: ${{ inputs.execute }}
+      NOTION_LIMIT: ${{ inputs.limit }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate required configuration
+        run: |
+          if [[ -z "${NOTION_TOKEN:-}" ]]; then
+            echo "::error::GitHub Secrets に NOTION_TOKEN を設定してください。"
+            exit 1
+          fi
+
+          if [[ -z "${NOTION_PAGE_ID:-}" && -z "${NOTION_DATABASE_ID:-}" && -z "${NOTION_DATA_SOURCE_ID:-}" ]]; then
+            echo "::error::GitHub Secrets の NOTION_PAGE_ID / NOTION_DATABASE_ID / NOTION_DATA_SOURCE_ID のいずれかを設定してください。"
+            exit 1
+          fi
+
+      - name: Run duplicator
+        run: |
+          chmod +x ./run_okr_duplicate.sh
+          ./run_okr_duplicate.sh
+
+      - name: Write summary
+        run: |
+          mode_label="dry-run"
+          if [[ "${NOTION_EXECUTE:-false}" == "true" ]]; then
+            mode_label="execute"
+          fi
+
+          {
+            echo "## Notion OKR duplicator"
+            echo ""
+            echo "- mode: ${mode_label}"
+            if [[ -n "${NOTION_LIMIT:-}" ]]; then
+              echo "- limit: ${NOTION_LIMIT}"
+            else
+              echo "- limit: all"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
