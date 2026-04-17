@@ -47,7 +47,7 @@ jobs:
       NOTION_LIMIT: ${{ inputs.limit }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Validate required configuration
         run: |

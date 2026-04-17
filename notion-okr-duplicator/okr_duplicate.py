@@ -895,6 +895,13 @@ def print_target_groups(groups: list[dict[str, Any]], limit: int | None) -> None
         print(f"... ほか {len(groups) - limit} 件")
 
 
+def env_or_default(name: str, default: str | None = None) -> str | None:
+    value = os.getenv(name)
+    if value is None or value == "":
+        return default
+    return value
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
@@ -902,20 +909,24 @@ def build_parser() -> argparse.ArgumentParser:
             "デフォルトは dry-run で、--execute を付けたときだけ実際に複製を作成します。"
         )
     )
-    parser.add_argument("--notion-token", default=os.getenv("NOTION_TOKEN"))
+    parser.add_argument("--notion-token", default=env_or_default("NOTION_TOKEN"))
     parser.add_argument(
         "--notion-base-url",
-        default=os.getenv("NOTION_BASE_URL", DEFAULT_NOTION_API_BASE_URL),
+        default=env_or_default("NOTION_BASE_URL", DEFAULT_NOTION_API_BASE_URL),
     )
-    parser.add_argument("--page-id", default=os.getenv("NOTION_PAGE_ID"))
-    parser.add_argument("--database-id", default=os.getenv("NOTION_DATABASE_ID"))
-    parser.add_argument("--data-source-id", default=os.getenv("NOTION_DATA_SOURCE_ID"))
-    parser.add_argument("--child-database-title", default=os.getenv("NOTION_CHILD_DATABASE_TITLE"))
-    parser.add_argument("--data-source-name", default=os.getenv("NOTION_DATA_SOURCE_NAME"))
-    parser.add_argument("--period-property", default=os.getenv("NOTION_PERIOD_PROPERTY", "対象期間"))
-    parser.add_argument("--object-property", default=os.getenv("NOTION_OBJECT_PROPERTY", "Objects"))
-    parser.add_argument("--key-property", default=os.getenv("NOTION_KEY_PROPERTY", "Keys"))
-    parser.add_argument("--timeout-seconds", type=float, default=DEFAULT_TIMEOUT_SECONDS)
+    parser.add_argument("--page-id", default=env_or_default("NOTION_PAGE_ID"))
+    parser.add_argument("--database-id", default=env_or_default("NOTION_DATABASE_ID"))
+    parser.add_argument("--data-source-id", default=env_or_default("NOTION_DATA_SOURCE_ID"))
+    parser.add_argument("--child-database-title", default=env_or_default("NOTION_CHILD_DATABASE_TITLE"))
+    parser.add_argument("--data-source-name", default=env_or_default("NOTION_DATA_SOURCE_NAME"))
+    parser.add_argument("--period-property", default=env_or_default("NOTION_PERIOD_PROPERTY", "対象期間"))
+    parser.add_argument("--object-property", default=env_or_default("NOTION_OBJECT_PROPERTY", "Objects"))
+    parser.add_argument("--key-property", default=env_or_default("NOTION_KEY_PROPERTY", "Keys"))
+    parser.add_argument(
+        "--timeout-seconds",
+        type=float,
+        default=float(env_or_default("NOTION_TIMEOUT_SECONDS", str(DEFAULT_TIMEOUT_SECONDS))),
+    )
     parser.add_argument("--limit", type=int)
     parser.add_argument("--execute", action="store_true")
     return parser
