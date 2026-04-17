@@ -844,11 +844,8 @@ def duplicate_pages(
     if not execute:
         return len(groups_to_duplicate), skipped_properties
 
-    # Current Notion view shows the newest created rows first, so create in the
-    # reverse order to preserve the visible top-to-bottom order.
-    creation_order = list(reversed(groups_to_duplicate))
     created_count = 0
-    for group in creation_order:
+    for group in groups_to_duplicate:
         page = group["latest_page"]
         create_properties, page_skipped_properties = build_create_properties(
             schema_properties=schema_properties,
