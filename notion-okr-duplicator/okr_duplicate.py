@@ -116,7 +116,6 @@ class NotionClient:
         while True:
             payload: dict[str, Any] = {
                 "page_size": 100,
-                "result_type": "page",
                 "in_trash": False,
             }
             if next_cursor:
