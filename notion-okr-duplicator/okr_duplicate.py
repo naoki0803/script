@@ -116,7 +116,6 @@ class NotionClient:
         while True:
             payload: dict[str, Any] = {
                 "page_size": 100,
-                "in_trash": False,
             }
             if next_cursor:
                 payload["start_cursor"] = next_cursor
@@ -126,7 +125,11 @@ class NotionClient:
                 path=f"/v1/data_sources/{data_source_id}/query",
                 payload=payload,
             )
-            results.extend([item for item in response.get("results", []) if item.get("object") == "page"])
+            results.extend(
+                item
+                for item in response.get("results", [])
+                if item.get("object") == "page" and not item.get("in_trash", False)
+            )
             if not response.get("has_more"):
                 return results
             next_cursor = response.get("next_cursor")
