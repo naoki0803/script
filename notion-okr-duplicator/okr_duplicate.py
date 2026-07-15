@@ -116,8 +116,6 @@ class NotionClient:
         while True:
             payload: dict[str, Any] = {
                 "page_size": 100,
-                "result_type": "page",
-                "in_trash": False,
             }
             if next_cursor:
                 payload["start_cursor"] = next_cursor
@@ -284,10 +282,6 @@ def localize_notion_api_error_message(
     return "Notion API でエラーが発生しました。設定値や接続状態を確認してください。"
 
 
-def normalize_group_component(value: str) -> str:
-    return re.sub(r"\s+", " ", value).strip()
-
-
 def find_title_property_name(properties: dict[str, Any]) -> str | None:
     for name, definition in properties.items():
         if definition.get("type") == "title":
@@ -374,171 +368,6 @@ def get_result_text(
 
     title_property = page.get("properties", {}).get(title_property_name, {})
     return property_to_plain_text(title_property).strip()
-
-
-def build_duplicate_group_key(
-    *,
-    page: dict[str, Any],
-    client: NotionClient,
-    period_property_name: str,
-    object_property_name: str,
-    key_property_name: str,
-    relation_title_cache: dict[str, str],
-) -> tuple[str, str, str]:
-    properties = page.get("properties", {})
-    return tuple(
-        normalize_group_component(
-            property_to_plain_text(
-                properties.get(property_name, {}),
-                client=client,
-                relation_title_cache=relation_title_cache,
-            )
-        )
-        for property_name in (period_property_name, object_property_name, key_property_name)
-    )
-
-
-def deduplicate_selected_pages(
-    *,
-    client: NotionClient,
-    pages: list[dict[str, Any]],
-    period_property_name: str,
-    object_property_name: str,
-    key_property_name: str,
-    created_time_property_name: str | None,
-    title_property_name: str | None,
-    relation_title_cache: dict[str, str],
-) -> tuple[list[dict[str, Any]], int]:
-    group_states: dict[tuple[str, str, str], dict[str, Any]] = {}
-
-    for index, page in enumerate(pages):
-        group_key = build_duplicate_group_key(
-            page=page,
-            client=client,
-            period_property_name=period_property_name,
-            object_property_name=object_property_name,
-            key_property_name=key_property_name,
-            relation_title_cache=relation_title_cache,
-        )
-
-        current_created_time = get_page_created_timestamp(page, created_time_property_name)
-        current_result_text = get_result_text(page, title_property_name)
-        state = group_states.get(group_key)
-        if state is None:
-            group_states[group_key] = {
-                "latest_page": page,
-                "latest_created_time": current_created_time,
-                "oldest_created_time": current_created_time,
-                "oldest_index": index,
-                "group_key": group_key,
-                "previous_result_text": current_result_text,
-                "previous_result_created_time": current_created_time if current_result_text else "",
-            }
-            continue
-
-        if current_created_time > state["latest_created_time"]:
-            state["latest_page"] = page
-            state["latest_created_time"] = current_created_time
-
-        if current_created_time < state["oldest_created_time"]:
-            state["oldest_created_time"] = current_created_time
-            state["oldest_index"] = index
-
-        if current_result_text:
-            previous_result_created_time = state["previous_result_created_time"]
-            if not previous_result_created_time or current_created_time > previous_result_created_time:
-                state["previous_result_text"] = current_result_text
-                state["previous_result_created_time"] = current_created_time
-
-    ordered_states = sorted(
-        group_states.values(),
-        key=lambda state: (state["oldest_created_time"], state["oldest_index"]),
-    )
-    dropped_duplicates = len(pages) - len(ordered_states)
-    return ordered_states, dropped_duplicates
-
-
-def filter_already_copied_today(
-    *,
-    client: NotionClient,
-    candidate_groups: list[dict[str, Any]],
-    all_pages: list[dict[str, Any]],
-    period_property_name: str,
-    object_property_name: str,
-    key_property_name: str,
-    created_time_property_name: str | None,
-    title_property_name: str | None,
-    relation_title_cache: dict[str, str],
-) -> tuple[list[dict[str, Any]], int, str]:
-    today_local_date = datetime.now().astimezone().date().isoformat()
-    groups_with_copy_today: set[tuple[str, str, str]] = set()
-
-    for page in all_pages:
-        if not is_blank_result_page(page, title_property_name):
-            continue
-
-        created_timestamp = get_page_created_timestamp(page, created_time_property_name)
-        created_local_date = get_local_date_string_from_timestamp(created_timestamp)
-        if created_local_date != today_local_date:
-            continue
-
-        groups_with_copy_today.add(
-            build_duplicate_group_key(
-                page=page,
-                client=client,
-                period_property_name=period_property_name,
-                object_property_name=object_property_name,
-                key_property_name=key_property_name,
-                relation_title_cache=relation_title_cache,
-            )
-        )
-
-    filtered_groups: list[dict[str, Any]] = []
-    skipped_count = 0
-    for group in candidate_groups:
-        group_key = group["group_key"]
-        if group_key in groups_with_copy_today:
-            skipped_count += 1
-            continue
-        filtered_groups.append(group)
-
-    return filtered_groups, skipped_count, today_local_date
-
-
-def describe_page(
-    page: dict[str, Any],
-    title_property_name: str | None,
-    object_property_name: str,
-    key_property_name: str,
-    client: NotionClient | None = None,
-    relation_title_cache: dict[str, str] | None = None,
-) -> str:
-    page_properties = page.get("properties", {})
-    title = page.get("id", "")
-
-    if title_property_name and title_property_name in page_properties:
-        maybe_title = property_to_plain_text(
-            page_properties[title_property_name],
-            client=client,
-            relation_title_cache=relation_title_cache,
-        ).strip()
-        if maybe_title:
-            title = maybe_title
-
-    details: list[str] = []
-    for label, property_name in (("Objects", object_property_name), ("Keys", key_property_name)):
-        if property_name in page_properties:
-            plain_text = property_to_plain_text(
-                page_properties[property_name],
-                client=client,
-                relation_title_cache=relation_title_cache,
-            ).strip()
-            if plain_text:
-                details.append(f"{label}={plain_text}")
-
-    if not details:
-        return title
-    return f"{title} ({', '.join(details)})"
 
 
 def resolve_data_source_id(
@@ -657,215 +486,213 @@ def resolve_data_source_id_from_database(
     return normalize_notion_id(chosen["id"]), chosen.get("name") or database_id
 
 
-def build_create_properties(
-    schema_properties: dict[str, Any],
-    page_properties: dict[str, Any],
-) -> tuple[dict[str, Any], set[str]]:
-    create_properties: dict[str, Any] = {}
-    skipped_properties: set[str] = set()
+# ---------------------------------------------------------------------------
+# Keys-driven flow
+# ---------------------------------------------------------------------------
 
-    for property_name, definition in schema_properties.items():
-        property_type = definition.get("type")
-        source_property = page_properties.get(property_name, {})
-
-        if property_type == "title":
-            create_properties[property_name] = {"title": []}
-            continue
-
-        if property_type == "rich_text":
-            rich_text = source_property.get("rich_text", [])
-            if rich_text:
-                create_properties[property_name] = {"rich_text": rich_text}
-            continue
-
-        if property_type == "number":
-            number = source_property.get("number")
-            if number is not None:
-                create_properties[property_name] = {"number": number}
-            continue
-
-        if property_type == "select":
-            selected = source_property.get("select")
-            if selected:
-                create_properties[property_name] = {"select": {"name": selected["name"]}}
-            continue
-
-        if property_type == "status":
-            status = source_property.get("status")
-            if status:
-                create_properties[property_name] = {"status": {"name": status["name"]}}
-            continue
-
-        if property_type == "multi_select":
-            multi_select = source_property.get("multi_select", [])
-            if multi_select:
-                create_properties[property_name] = {
-                    "multi_select": [{"name": option["name"]} for option in multi_select]
-                }
-            continue
-
-        if property_type == "date":
-            date_value = source_property.get("date")
-            if date_value:
-                create_properties[property_name] = {"date": date_value}
-            continue
-
-        if property_type == "checkbox":
-            create_properties[property_name] = {"checkbox": bool(source_property.get("checkbox"))}
-            continue
-
-        if property_type == "url":
-            url = source_property.get("url")
-            if url:
-                create_properties[property_name] = {"url": url}
-            continue
-
-        if property_type == "email":
-            email_value = source_property.get("email")
-            if email_value:
-                create_properties[property_name] = {"email": email_value}
-            continue
-
-        if property_type == "phone_number":
-            phone_number = source_property.get("phone_number")
-            if phone_number:
-                create_properties[property_name] = {"phone_number": phone_number}
-            continue
-
-        if property_type == "people":
-            people = source_property.get("people", [])
-            if people:
-                create_properties[property_name] = {"people": [{"id": person["id"]} for person in people]}
-            continue
-
-        if property_type == "relation":
-            relations = source_property.get("relation", [])
-            if relations:
-                create_properties[property_name] = {"relation": [{"id": relation["id"]} for relation in relations]}
-            if source_property.get("has_more"):
-                skipped_properties.add(f"{property_name} (relation values were truncated by Notion)")
-            continue
-
-        if property_type == "files":
-            files = []
-            skipped_internal_upload = False
-            for file_object in source_property.get("files", []):
-                if file_object.get("type") == "external" and file_object.get("external", {}).get("url"):
-                    files.append(
-                        {
-                            "name": file_object.get("name", "External file"),
-                            "type": "external",
-                            "external": {"url": file_object["external"]["url"]},
-                        }
-                    )
-                elif file_object.get("type") == "file":
-                    skipped_internal_upload = True
-
-            if files:
-                create_properties[property_name] = {"files": files}
-            if skipped_internal_upload:
-                skipped_properties.add(f"{property_name} (Notion-hosted file uploads were skipped)")
-            continue
-
-        if property_type in READ_ONLY_PROPERTY_TYPES:
-            skipped_properties.add(f"{property_name} ({property_type})")
-            continue
-
-        skipped_properties.add(f"{property_name} ({property_type or 'unknown'})")
-
-    return create_properties, skipped_properties
-
-
-def select_source_pages(
+def extract_key_groups_for_latest_period(
     *,
     client: NotionClient,
-    pages: list[dict[str, Any]],
-    period_property_name: str,
-    title_property_name: str | None,
-    object_property_name: str,
-    key_property_name: str,
+    key_pages: list[dict[str, Any]],
+    keys_period_property_name: str,
+    keys_object_property_name: str,
     relation_title_cache: dict[str, str],
 ) -> tuple[YearMonth, list[dict[str, Any]], list[str]]:
-    latest_period: YearMonth | None = None
-    candidates: list[tuple[YearMonth, dict[str, Any]]] = []
+    """
+    Keys テーブルを走査して最新の対象期間を持つ Key グループを返す。
+    各グループは key_page / key_page_id / key_name / object_page_ids /
+    object_name / period_page_ids / previous_result_text を持つ dict。
+    """
+    parsed: list[tuple[YearMonth, dict[str, Any]]] = []
     warnings: list[str] = []
 
-    for page in pages:
-        properties = page.get("properties", {})
-        period_property = properties.get(period_property_name)
-        if period_property is None:
-            raise NotionAutomationError(
-                f"ページ {page.get('id')} にプロパティ '{period_property_name}' が見つかりませんでした。"
+    for key_page in key_pages:
+        properties = key_page.get("properties", {})
+        period_prop = properties.get(keys_period_property_name)
+        if period_prop is None:
+            warnings.append(
+                f"Key '{get_page_title(key_page)}': プロパティ '{keys_period_property_name}' が見つかりません"
             )
+            continue
 
         raw_period = property_to_plain_text(
-            period_property,
-            client=client,
-            relation_title_cache=relation_title_cache,
+            period_prop, client=client, relation_title_cache=relation_title_cache
         )
         parsed_period = parse_year_month(raw_period)
         if not parsed_period:
             warnings.append(
-                f"ページ '{describe_page(page, title_property_name, object_property_name, key_property_name, client, relation_title_cache)}' は "
-                f"'{period_property_name}' を年月として解釈できないためスキップしました: {raw_period or '(空)'}"
+                f"Key '{get_page_title(key_page)}': '{keys_period_property_name}' を年月として解釈できませんでした: {raw_period or '(空)'}"
             )
             continue
 
-        candidates.append((parsed_period, page))
-        if latest_period is None or parsed_period > latest_period:
-            latest_period = parsed_period
+        parsed.append((parsed_period, key_page))
 
-    if latest_period is None:
+    if not parsed:
         raise NotionAutomationError(
-            f"'{period_property_name}' を年月として解釈できる行が見つかりませんでした。"
+            f"'{keys_period_property_name}' を年月として解釈できるキーが見つかりませんでした。"
         )
 
-    selected_pages = [page for period, page in candidates if period == latest_period]
-    return latest_period, selected_pages, warnings
+    latest_period = max(p for p, _ in parsed)
+
+    groups: list[dict[str, Any]] = []
+    for period, key_page in parsed:
+        if period != latest_period:
+            continue
+
+        key_page_id = normalize_notion_id(key_page.get("id", ""))
+        key_props = key_page.get("properties", {})
+
+        period_page_ids = [
+            item.get("id", "")
+            for item in key_props.get(keys_period_property_name, {}).get("relation", [])
+        ]
+        object_page_ids = [
+            item.get("id", "")
+            for item in key_props.get(keys_object_property_name, {}).get("relation", [])
+        ]
+        object_name = property_to_plain_text(
+            key_props.get(keys_object_property_name, {}),
+            client=client,
+            relation_title_cache=relation_title_cache,
+        ).strip()
+        key_name = get_page_title(key_page)
+
+        groups.append({
+            "key_page": key_page,
+            "key_page_id": key_page_id,
+            "key_name": key_name,
+            "object_page_ids": object_page_ids,
+            "object_name": object_name,
+            "period_page_ids": period_page_ids,
+            "previous_result_text": "",
+        })
+
+    return latest_period, groups, warnings
 
 
-def print_warning(message: str) -> None:
-    print(f"警告: {message}", file=sys.stderr)
-
-
-def duplicate_pages(
-    client: NotionClient,
+def enrich_key_groups_with_previous_results(
     *,
-    data_source_id: str,
-    data_source_name: str,
-    schema_properties: dict[str, Any],
-    selected_groups: list[dict[str, Any]],
-    execute: bool,
-    limit: int | None,
-) -> tuple[int, set[str]]:
-    groups_to_duplicate = selected_groups if limit is None else selected_groups[:limit]
+    key_groups: list[dict[str, Any]],
+    result_pages: list[dict[str, Any]],
+    title_property_name: str | None,
+    created_time_property_name: str | None,
+    results_key_property_name: str,
+) -> None:
+    """Results テーブルから各 Key の直近の実施結果テキストを key_group に付与する。"""
+    if not title_property_name:
+        return
+
+    # key_page_id → [(created_timestamp, result_text)]
+    key_result_history: dict[str, list[tuple[str, str]]] = {}
+    for result_page in result_pages:
+        result_text = get_result_text(result_page, title_property_name)
+        if not result_text:
+            continue
+
+        created_timestamp = get_page_created_timestamp(result_page, created_time_property_name)
+        key_relations = (
+            result_page.get("properties", {})
+            .get(results_key_property_name, {})
+            .get("relation", [])
+        )
+        for key_item in key_relations:
+            key_id = normalize_notion_id(key_item.get("id", ""))
+            key_result_history.setdefault(key_id, []).append((created_timestamp, result_text))
+
+    for group in key_groups:
+        history = key_result_history.get(group["key_page_id"], [])
+        if history:
+            group["previous_result_text"] = max(history, key=lambda x: x[0])[1]
+
+
+def filter_key_groups_already_today(
+    *,
+    key_groups: list[dict[str, Any]],
+    result_pages: list[dict[str, Any]],
+    title_property_name: str | None,
+    created_time_property_name: str | None,
+    results_key_property_name: str,
+) -> tuple[list[dict[str, Any]], int, str]:
+    """本日すでに空の Results 行が作成済みの Key グループを除外する。"""
+    today_local_date = datetime.now().astimezone().date().isoformat()
+    keys_with_blank_result_today: set[str] = set()
+
+    for result_page in result_pages:
+        if not is_blank_result_page(result_page, title_property_name):
+            continue
+
+        created_timestamp = get_page_created_timestamp(result_page, created_time_property_name)
+        if get_local_date_string_from_timestamp(created_timestamp) != today_local_date:
+            continue
+
+        key_relations = (
+            result_page.get("properties", {})
+            .get(results_key_property_name, {})
+            .get("relation", [])
+        )
+        for key_item in key_relations:
+            keys_with_blank_result_today.add(normalize_notion_id(key_item.get("id", "")))
+
+    filtered: list[dict[str, Any]] = []
+    skipped = 0
+    for group in key_groups:
+        if group["key_page_id"] in keys_with_blank_result_today:
+            skipped += 1
+        else:
+            filtered.append(group)
+
+    return filtered, skipped, today_local_date
+
+
+def build_results_create_properties_from_key(
+    *,
+    results_schema_properties: dict[str, Any],
+    key_page: dict[str, Any],
+    key_page_id: str,
+    results_key_property_name: str,
+    results_period_property_name: str,
+    results_object_property_name: str,
+    keys_period_property_name: str,
+    keys_object_property_name: str,
+) -> tuple[dict[str, Any], set[str]]:
+    """Key ページを元に、新しい Results 行の properties dict を構築する。"""
+    create_properties: dict[str, Any] = {}
     skipped_properties: set[str] = set()
+    key_props = key_page.get("properties", {})
 
-    if not execute:
-        return len(groups_to_duplicate), skipped_properties
+    for property_name, definition in results_schema_properties.items():
+        property_type = definition.get("type")
 
-    created_count = 0
-    for group in groups_to_duplicate:
-        page = group["latest_page"]
-        create_properties, page_skipped_properties = build_create_properties(
-            schema_properties=schema_properties,
-            page_properties=page.get("properties", {}),
-        )
-        skipped_properties.update(page_skipped_properties)
-        client.request_json(
-            method="POST",
-            path="/v1/pages",
-            payload={
-                "parent": {
-                    "type": "data_source_id",
-                    "data_source_id": data_source_id,
-                },
-                "properties": create_properties,
-            },
-        )
-        created_count += 1
+        if property_type == "title":
+            # 実施結果は空欄にする
+            create_properties[property_name] = {"title": []}
 
-    return created_count, skipped_properties
+        elif property_name == results_key_property_name and property_type == "relation":
+            # Keys relation に今回の Key をセット
+            create_properties[property_name] = {"relation": [{"id": key_page_id}]}
+
+        elif property_name == results_period_property_name and property_type == "relation":
+            # Key の対象期間 relation をそのままコピー
+            period_items = key_props.get(keys_period_property_name, {}).get("relation", [])
+            if period_items:
+                create_properties[property_name] = {
+                    "relation": [{"id": item["id"]} for item in period_items]
+                }
+
+        elif property_name == results_object_property_name and property_type == "relation":
+            # Key の Object relation をそのままコピー
+            object_items = key_props.get(keys_object_property_name, {}).get("relation", [])
+            if object_items:
+                create_properties[property_name] = {
+                    "relation": [{"id": item["id"]} for item in object_items]
+                }
+
+        elif property_type in READ_ONLY_PROPERTY_TYPES:
+            skipped_properties.add(f"{property_name} ({property_type})")
+
+        # その他のプロパティ(date, rich_text, select 等)は空のまま作成するためスキップ
+
+    return create_properties, skipped_properties
 
 
 def print_result_box(lines: list[str]) -> None:
@@ -875,17 +702,16 @@ def print_result_box(lines: list[str]) -> None:
     print("└──────────────────────────────────────")
 
 
-def print_target_groups(groups: list[dict[str, Any]], limit: int | None) -> None:
+def print_key_groups(groups: list[dict[str, Any]], limit: int | None) -> None:
     groups_to_show = groups if limit is None else groups[:limit]
     if not groups_to_show:
         print("今回複製対象になるレコードはありません。")
         return
 
     for index, group in enumerate(groups_to_show, start=1):
-        _, object_name, key_name = group["group_key"]
         previous_result_text = group["previous_result_text"] or "(空欄)"
-        print(f"[対象{index}] {object_name}")
-        print(f"  Keys          : {key_name}")
+        print(f"[対象{index}] {group['object_name']}")
+        print(f"  Keys          : {group['key_name']}")
         print(f"  前回実施結果 : {previous_result_text}")
         if index != len(groups_to_show):
             print("")
@@ -893,6 +719,59 @@ def print_target_groups(groups: list[dict[str, Any]], limit: int | None) -> None
     if limit is not None and len(groups) > limit:
         print("")
         print(f"... ほか {len(groups) - limit} 件")
+
+
+def create_results_for_key_groups(
+    client: NotionClient,
+    *,
+    key_groups: list[dict[str, Any]],
+    results_data_source_id: str,
+    results_schema_properties: dict[str, Any],
+    results_key_property_name: str,
+    results_period_property_name: str,
+    results_object_property_name: str,
+    keys_period_property_name: str,
+    keys_object_property_name: str,
+    execute: bool,
+    limit: int | None,
+) -> tuple[int, set[str]]:
+    groups_to_process = key_groups if limit is None else key_groups[:limit]
+    skipped_properties: set[str] = set()
+
+    if not execute:
+        return len(groups_to_process), skipped_properties
+
+    created_count = 0
+    for group in groups_to_process:
+        create_properties, page_skipped = build_results_create_properties_from_key(
+            results_schema_properties=results_schema_properties,
+            key_page=group["key_page"],
+            key_page_id=group["key_page_id"],
+            results_key_property_name=results_key_property_name,
+            results_period_property_name=results_period_property_name,
+            results_object_property_name=results_object_property_name,
+            keys_period_property_name=keys_period_property_name,
+            keys_object_property_name=keys_object_property_name,
+        )
+        skipped_properties.update(page_skipped)
+        client.request_json(
+            method="POST",
+            path="/v1/pages",
+            payload={
+                "parent": {
+                    "type": "data_source_id",
+                    "data_source_id": results_data_source_id,
+                },
+                "properties": create_properties,
+            },
+        )
+        created_count += 1
+
+    return created_count, skipped_properties
+
+
+def print_warning(message: str) -> None:
+    print(f"警告: {message}", file=sys.stderr)
 
 
 def env_or_default(name: str, default: str | None = None) -> str | None:
@@ -905,8 +784,8 @@ def env_or_default(name: str, default: str | None = None) -> str | None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Notion のデータソースで、最新の 対象期間 にある行を複製します。"
-            "デフォルトは dry-run で、--execute を付けたときだけ実際に複製を作成します。"
+            "Keys テーブルの最新対象期間を参照し、該当 Key ごとに Results テーブルへ空行を作成します。"
+            "デフォルトは dry-run で、--execute を付けたときだけ実際に作成します。"
         )
     )
     parser.add_argument("--notion-token", default=env_or_default("NOTION_TOKEN"))
@@ -914,14 +793,39 @@ def build_parser() -> argparse.ArgumentParser:
         "--notion-base-url",
         default=env_or_default("NOTION_BASE_URL", DEFAULT_NOTION_API_BASE_URL),
     )
+    # Results データソース (書き込み先)
     parser.add_argument("--page-id", default=env_or_default("NOTION_PAGE_ID"))
     parser.add_argument("--database-id", default=env_or_default("NOTION_DATABASE_ID"))
     parser.add_argument("--data-source-id", default=env_or_default("NOTION_DATA_SOURCE_ID"))
     parser.add_argument("--child-database-title", default=env_or_default("NOTION_CHILD_DATABASE_TITLE"))
     parser.add_argument("--data-source-name", default=env_or_default("NOTION_DATA_SOURCE_NAME"))
-    parser.add_argument("--period-property", default=env_or_default("NOTION_PERIOD_PROPERTY", "対象期間"))
-    parser.add_argument("--object-property", default=env_or_default("NOTION_OBJECT_PROPERTY", "Objects"))
-    parser.add_argument("--key-property", default=env_or_default("NOTION_KEY_PROPERTY", "Keys"))
+    # Keys データソース (期間判定元)
+    parser.add_argument(
+        "--keys-data-source-id",
+        default=env_or_default("NOTION_KEYS_DATA_SOURCE_ID"),
+    )
+    # Keys テーブル側のプロパティ名
+    parser.add_argument(
+        "--keys-period-property",
+        default=env_or_default("NOTION_KEYS_PERIOD_PROPERTY", "対象期間"),
+    )
+    parser.add_argument(
+        "--keys-object-property",
+        default=env_or_default("NOTION_KEYS_OBJECT_PROPERTY", "Object"),
+    )
+    # Results テーブル側のプロパティ名
+    parser.add_argument(
+        "--results-key-property",
+        default=env_or_default("NOTION_RESULTS_KEY_PROPERTY", "Keys"),
+    )
+    parser.add_argument(
+        "--results-period-property",
+        default=env_or_default("NOTION_RESULTS_PERIOD_PROPERTY", "対象期間"),
+    )
+    parser.add_argument(
+        "--results-object-property",
+        default=env_or_default("NOTION_RESULTS_OBJECT_PROPERTY", "Objects"),
+    )
     parser.add_argument(
         "--timeout-seconds",
         type=float,
@@ -944,12 +848,19 @@ def main() -> int:
             "NOTION_PAGE_ID、NOTION_DATABASE_ID、NOTION_DATA_SOURCE_ID のいずれかを設定してください。"
         )
 
+    if not args.keys_data_source_id:
+        raise NotionAutomationError(
+            "NOTION_KEYS_DATA_SOURCE_ID の設定が必要です。Keys データソースの ID を指定してください。"
+        )
+
     client = NotionClient(
         token=args.notion_token,
         timeout_seconds=args.timeout_seconds,
         base_url=args.notion_base_url,
     )
-    data_source_id, data_source_name = resolve_data_source_id(
+
+    # Results データソース (書き込み先) を解決
+    results_data_source_id, results_data_source_name = resolve_data_source_id(
         client,
         data_source_id=args.data_source_id,
         database_id=args.database_id,
@@ -958,76 +869,72 @@ def main() -> int:
         data_source_name=args.data_source_name,
     )
 
-    data_source = client.request_json("GET", f"/v1/data_sources/{data_source_id}")
-    schema_properties = data_source.get("properties", {})
-    title_property_name = find_title_property_name(schema_properties)
-    created_time_property_name = find_created_time_property_name(schema_properties)
+    # Results スキーマ取得
+    results_ds = client.request_json("GET", f"/v1/data_sources/{results_data_source_id}")
+    results_schema = results_ds.get("properties", {})
+    results_title_property_name = find_title_property_name(results_schema)
+    results_created_time_property_name = find_created_time_property_name(results_schema)
+
+    keys_data_source_id = normalize_notion_id(args.keys_data_source_id)
     relation_title_cache: dict[str, str] = {}
-    if args.period_property not in schema_properties:
-        raise NotionAutomationError(
-            f"データソース '{data_source_name}' にプロパティ '{args.period_property}' が存在しません。"
-        )
 
-    pages = client.query_all_pages(data_source_id)
-    latest_period, selected_pages, warnings = select_source_pages(
+    # Keys テーブルを取得して最新期間の Key グループを抽出
+    key_pages = client.query_all_pages(keys_data_source_id)
+    latest_period, key_groups, warnings = extract_key_groups_for_latest_period(
         client=client,
-        pages=pages,
-        period_property_name=args.period_property,
-        title_property_name=title_property_name,
-        object_property_name=args.object_property,
-        key_property_name=args.key_property,
+        key_pages=key_pages,
+        keys_period_property_name=args.keys_period_property,
+        keys_object_property_name=args.keys_object_property,
         relation_title_cache=relation_title_cache,
     )
 
-    deduplicated_groups, dropped_duplicates = deduplicate_selected_pages(
-        client=client,
-        pages=selected_pages,
-        period_property_name=args.period_property,
-        object_property_name=args.object_property,
-        key_property_name=args.key_property,
-        created_time_property_name=created_time_property_name,
-        title_property_name=title_property_name,
-        relation_title_cache=relation_title_cache,
+    # Results テーブルを取得して前回結果表示 & 本日作成済みチェックに使う
+    result_pages = client.query_all_pages(results_data_source_id)
+
+    enrich_key_groups_with_previous_results(
+        key_groups=key_groups,
+        result_pages=result_pages,
+        title_property_name=results_title_property_name,
+        created_time_property_name=results_created_time_property_name,
+        results_key_property_name=args.results_key_property,
     )
-    groups_to_copy, skipped_existing_today, today_local_date = filter_already_copied_today(
-        client=client,
-        candidate_groups=deduplicated_groups,
-        all_pages=pages,
-        period_property_name=args.period_property,
-        object_property_name=args.object_property,
-        key_property_name=args.key_property,
-        created_time_property_name=created_time_property_name,
-        title_property_name=title_property_name,
-        relation_title_cache=relation_title_cache,
+
+    groups_to_copy, skipped_existing_today, today_local_date = filter_key_groups_already_today(
+        key_groups=key_groups,
+        result_pages=result_pages,
+        title_property_name=results_title_property_name,
+        created_time_property_name=results_created_time_property_name,
+        results_key_property_name=args.results_key_property,
     )
 
     mode_label = "本番実行" if args.execute else "ドライラン"
     planned_count = len(groups_to_copy if args.limit is None else groups_to_copy[: args.limit])
     summary_lines = [
         f"モード               : {mode_label}",
-        f"データソース         : {data_source_name}",
+        f"データソース         : {results_data_source_name}",
         f"対象期間             : {latest_period}",
-        f"最新期間の元行数     : {len(selected_pages)}件",
-        f"重複解消後の対象     : {len(deduplicated_groups)}件",
+        f"対象Keyの件数        : {len(key_groups)}件",
         f"本日作成済みスキップ : {skipped_existing_today}件",
         f"対象期間解釈不可     : {len(warnings)}件",
         f"今回の複製予定       : {planned_count}件",
     ]
-    if dropped_duplicates:
-        summary_lines.append(f"重複除外             : {dropped_duplicates}件")
     if skipped_existing_today:
         summary_lines.append(f"スキップ対象日       : {today_local_date}")
     print_result_box(summary_lines)
     print("")
-    print_target_groups(groups_to_copy, args.limit)
+    print_key_groups(groups_to_copy, args.limit)
     print("")
 
-    created_count, skipped_properties = duplicate_pages(
+    created_count, skipped_properties = create_results_for_key_groups(
         client,
-        data_source_id=data_source_id,
-        data_source_name=data_source_name,
-        schema_properties=schema_properties,
-        selected_groups=groups_to_copy,
+        key_groups=groups_to_copy,
+        results_data_source_id=results_data_source_id,
+        results_schema_properties=results_schema,
+        results_key_property_name=args.results_key_property,
+        results_period_property_name=args.results_period_property,
+        results_object_property_name=args.results_object_property,
+        keys_period_property_name=args.keys_period_property,
+        keys_object_property_name=args.keys_object_property,
         execute=args.execute,
         limit=args.limit,
     )
