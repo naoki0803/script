@@ -816,7 +816,7 @@ def build_parser() -> argparse.ArgumentParser:
     # Results テーブル側のプロパティ名
     parser.add_argument(
         "--results-key-property",
-        default=env_or_default("NOTION_RESULTS_KEY_PROPERTY", "Keys"),
+        default=env_or_default("NOTION_RESULTS_KEY_PROPERTY", "Key"),
     )
     parser.add_argument(
         "--results-period-property",

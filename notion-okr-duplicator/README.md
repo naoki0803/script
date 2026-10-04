@@ -108,6 +108,7 @@ workflow は GitHub 上に存在してはじめて実行できるので、まず
 ```text
 NOTION_TOKEN
 NOTION_DATA_SOURCE_ID
+NOTION_KEYS_DATA_SOURCE_ID
 ```
 
 必要に応じて次も設定できます。
@@ -124,7 +125,7 @@ NOTION_KEY_PROPERTY
 NOTION_TIMEOUT_SECONDS
 ```
 
-通常は `NOTION_TOKEN` と `NOTION_DATA_SOURCE_ID` だけで足ります。  
+通常は `NOTION_TOKEN`・`NOTION_DATA_SOURCE_ID`（Results）・`NOTION_KEYS_DATA_SOURCE_ID`（Keys）だけで足ります。  
 `NOTION_EXECUTE` や `NOTION_LIMIT` は workflow 起動時の input で渡すので、Secrets に入れなくて大丈夫です。
 
 ### 3. GitHub で手動実行する
