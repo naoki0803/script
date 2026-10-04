@@ -39,6 +39,7 @@ jobs:
       NOTION_DATA_SOURCE_ID: ${{ secrets.NOTION_DATA_SOURCE_ID }}
       NOTION_CHILD_DATABASE_TITLE: ${{ secrets.NOTION_CHILD_DATABASE_TITLE }}
       NOTION_DATA_SOURCE_NAME: ${{ secrets.NOTION_DATA_SOURCE_NAME }}
+      NOTION_KEYS_DATA_SOURCE_ID: ${{ secrets.NOTION_KEYS_DATA_SOURCE_ID }}
       NOTION_PERIOD_PROPERTY: ${{ secrets.NOTION_PERIOD_PROPERTY }}
       NOTION_OBJECT_PROPERTY: ${{ secrets.NOTION_OBJECT_PROPERTY }}
       NOTION_KEY_PROPERTY: ${{ secrets.NOTION_KEY_PROPERTY }}
@@ -58,6 +59,11 @@ jobs:
 
           if [[ -z "${NOTION_PAGE_ID:-}" && -z "${NOTION_DATABASE_ID:-}" && -z "${NOTION_DATA_SOURCE_ID:-}" ]]; then
             echo "::error::GitHub Secrets の NOTION_PAGE_ID / NOTION_DATABASE_ID / NOTION_DATA_SOURCE_ID のいずれかを設定してください。"
+            exit 1
+          fi
+
+          if [[ -z "${NOTION_KEYS_DATA_SOURCE_ID:-}" ]]; then
+            echo "::error::GitHub Secrets に NOTION_KEYS_DATA_SOURCE_ID を設定してください。"
             exit 1
           fi
 
